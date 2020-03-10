@@ -1,120 +1,159 @@
-class Node():
-    """A node class for A* Pathfinding"""
+from collections import deque
+from itertools import chain, tee
+from math import sqrt
+from random import choice
 
-    def __init__(self, parent=None, position=None):
-        self.parent = parent
-        self.position = position
+class Puzzle:
+    HOLE = 0
 
-        self.g = 0
-        self.h = 0
-        self.f = 0
+    """
+    A class representing an '8-puzzle'.
+    - 'board' should be a square list of lists with integer entries 0...width^2 - 1
+       e.g. [[1,2,3],[4,0,6],[7,5,8]]
+    """
+    def __init__(self, board, hole_location=None, width=None):
+        # Use a flattened representation of the board (if it isn't already)
+        self.board = list(chain.from_iterable(board)) if hasattr(board[0], '__iter__') else board
+        self.hole = hole_location if hole_location is not None else self.board.index(Puzzle.HOLE)
+        self.width = width or int(sqrt(len(self.board)))
+
+    @property
+    def solved(self):
+        """
+        The puzzle is solved if the flattened board's numbers are in
+        increasing order from left to right and the '0' tile is in the
+        last position on the board
+        """
+        return self.board == list(range(1, self.width * self.width)) + [Puzzle.HOLE]
+
+    @property 
+    def possible_moves(self):
+        """
+        A generator for the possible moves for the hole, where the
+        board is linearized in row-major order.  Possibilities are
+        -1 (left), +1 (right), -width (up), or +width (down).
+        """
+        # Up, down
+        for dest in (self.hole - self.width, self.hole + self.width):
+            if 0 <= dest < len(self.board):
+                yield dest
+        # Left, right
+        for dest in (self.hole - 1, self.hole + 1):
+            if dest // self.width == self.hole // self.width:
+                yield dest
+
+    def move(self, destination):
+        """
+        Move the hole to the specified index.
+        """
+        board = self.board[:]
+        board[self.hole], board[destination] = board[destination], board[self.hole]
+        return Puzzle(board, destination, self.width)
+
+    def shuffle(self, moves=1000):
+        """
+        Return a new puzzle that has been shuffled with random moves
+        """
+        p = self
+        for _ in range(moves):
+            p = p.move(choice(list(p.possible_moves)))
+        return p
+
+    @staticmethod
+    def direction(a, b):
+        """
+        The direction of the movement of the hole (L, R, U, or D) from a to b.
+        """
+        if a is None:
+            return None
+        return {
+                     -a.width: 'U',
+            -1: 'L',    0: None,    +1: 'R',
+                     +a.width: 'D',
+        }[b.hole - a.hole]
+
+    def __str__(self):
+        return "\n".join(str(self.board[start : start + self.width])
+                         for start in range(0, len(self.board), self.width))
 
     def __eq__(self, other):
-        return self.position == other.position
+        return self.board == other.board
+
+    def __hash__(self):
+        h = 0
+        for value, i in enumerate(self.board):
+            h ^= value << i
+        return h
+
+class MoveSequence:
+    """
+    Represents the successive states of a puzzle taken to reach an end state.
+    """
+    def __init__(self, last, prev_holes=None):
+        self.last = last
+        self.prev_holes = prev_holes or []
+
+    def branch(self, destination):
+        """
+        Makes a MoveSequence with the same history followed by a move of
+        the hole to the specified destination index.
+        """
+        return MoveSequence(self.last.move(destination),
+                            self.prev_holes + [self.last.hole])
+
+    def __iter__(self):
+        """
+        Generator of puzzle states, starting with the initial configuration
+        """
+        states = [self.last]
+        for hole in reversed(self.prev_holes):
+            states.append(states[-1].move(hole))
+        yield from reversed(states)
+
+class Solver:
+    """
+    An '8-puzzle' solver
+    - 'start' is a Puzzle instance
+    """
+    def __init__(self, start):
+        self.start = start
+
+    def solve(self):
+        """
+        Perform breadth-first search and return a MoveSequence of the solution,
+        if it exists 
+        """
+        queue = deque([MoveSequence(self.start)])
+        seen  = set([self.start])
+        if self.start.solved:
+            return queue.pop()
+
+        for seq in iter(queue.pop, None):
+            for destination in seq.last.possible_moves:
+                attempt = seq.branch(destination)
+                if attempt.last not in seen:
+                    seen.add(attempt.last)
+                    queue.appendleft(attempt)
+                    if attempt.last.solved:
+                        return attempt
 
 
-def astar(maze, start, end):
-    """Returns a list of tuples as a path from the given start to the given end in the given maze"""
-
-    # Create start and end node
-    start_node = Node(None, start)
-    start_node.g = start_node.h = start_node.f = 0
-    end_node = Node(None, end)
-    end_node.g = end_node.h = end_node.f = 0
-
-    # Initialize both open and closed list
-    open_list = []
-    closed_list = []
-
-    # Add the start node
-    open_list.append(start_node)
-
-    # Loop until you find the end
-    while len(open_list) > 0:
-
-        # Get the current node
-        current_node = open_list[0]
-        current_index = 0
-        for index, item in enumerate(open_list):
-            if item.f < current_node.f:
-                current_node = item
-                current_index = index
-
-        # Pop current off open list, add to closed list
-        open_list.pop(current_index)
-        closed_list.append(current_node)
-
-        # Found the goal
-        if current_node == end_node:
-            path = []
-            current = current_node
-            while current is not None:
-                path.append(current.position)
-                current = current.parent
-            return path[::-1] # Return reversed path
-
-        # Generate children
-        children = []
-        for new_position in [(0, -1), (0, 1), (-1, 0), (1, 0), (-1, -1), (-1, 1), (1, -1), (1, 1)]: # Adjacent squares
-
-            # Get node position
-            node_position = (current_node.position[0] + new_position[0], current_node.position[1] + new_position[1])
-
-            # Make sure within range
-            if node_position[0] > (len(maze) - 1) or node_position[0] < 0 or node_position[1] > (len(maze[len(maze)-1]) -1) or node_position[1] < 0:
-                continue
-
-            # Make sure walkable terrain
-            if maze[node_position[0]][node_position[1]] != 0:
-                continue
-
-            # Create new node
-            new_node = Node(current_node, node_position)
-
-            # Append
-            children.append(new_node)
-
-        # Loop through children
-        for child in children:
-
-            # Child is on the closed list
-            for closed_child in closed_list:
-                if child == closed_child:
-                    continue
-
-            # Create the f, g, and h values
-            child.g = current_node.g + 1
-            child.h = ((child.position[0] - end_node.position[0]) ** 2) + ((child.position[1] - end_node.position[1]) ** 2)
-            child.f = child.g + child.h
-
-            # Child is already in the open list
-            for open_node in open_list:
-                if child == open_node and child.g > open_node.g:
-                    continue
-
-            # Add the child to the open list
-            open_list.append(child)
-
-
-def main():
-
-    maze = [[0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]]
-
-    start = (0, 0)
-    end = (7, 6)
-
-    path = astar(maze, start, end)
-    print(path)
-
+# https://docs.python.org/3/library/itertools.html#itertools-recipes
+def pairwise(iterable):
+    "s -> (s0,s1), (s1,s2), (s2, s3), ..."
+    a, b = tee(iterable)
+    next(b, None)
+    return zip(a, b)
 
 if __name__ == '__main__':
-    main()
+    board = [[1,2,3],
+             [4,0,6],
+             [7,5,8]]
+
+    puzzle = Puzzle(board).shuffle()
+    print(puzzle)
+    move_seq = iter(Solver(puzzle).solve())
+    for from_state, to_state in pairwise(move_seq):
+        print()
+        print(Puzzle.direction(from_state, to_state))
+        print(to_state)
